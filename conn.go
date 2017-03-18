@@ -240,7 +240,7 @@ func (l *Conn) processMessages() {
 					fmt.Printf("Unexpected Message Result: %d\n", message_id)
 					ber.PrintPacket(message_packet.Packet)
 				} else {
-					go func() { chanResult <- message_packet.Packet }()
+					go func(p *ber.Packet) { chanResult <- p }(message_packet.Packet)
 					// chanResult <- message_packet.Packet
 				}
 			case MessageFinish:
