@@ -8,6 +8,7 @@ package ldap
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mmitton/asn1-ber"
 )
@@ -214,33 +215,40 @@ func compileFilter(filter string, pos int) (p *ber.Packet, new_pos int, err erro
 			return
 		}
 		p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, attribute, "Attribute"))
-		switch {
-		case p.Tag == FilterEqualityMatch && condition == "*":
-			p.Tag = FilterPresent
-			p.Description = FilterMap[uint64(p.Tag)]
-		case p.Tag == FilterEqualityMatch && condition[0] == '*' && condition[len(condition)-1] == '*':
-			// Any
-			p.Tag = FilterSubstrings
-			p.Description = FilterMap[uint64(p.Tag)]
-			seq := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "Substrings")
-			seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsAny, condition[1:len(condition)-1], "Any Substring"))
-			p.AppendChild(seq)
-		case p.Tag == FilterEqualityMatch && condition[0] == '*':
-			// Final
-			p.Tag = FilterSubstrings
-			p.Description = FilterMap[uint64(p.Tag)]
-			seq := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "Substrings")
-			seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsFinal, condition[1:], "Final Substring"))
-			p.AppendChild(seq)
-		case p.Tag == FilterEqualityMatch && condition[len(condition)-1] == '*':
-			// Initial
-			p.Tag = FilterSubstrings
-			p.Description = FilterMap[uint64(p.Tag)]
-			seq := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "Substrings")
-			seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsInitial, condition[:len(condition)-1], "Initial Substring"))
-			p.AppendChild(seq)
-		default:
-			p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, condition, "Condition"))
+		is_partial_match := false
+		if p.Tag == FilterEqualityMatch {
+			components := strings.Split(condition, "*")
+			if len(components) > 1 {
+				is_partial_match = true
+				p.Tag = FilterSubstrings
+				p.Description = FilterMap[uint64(p.Tag)]
+				seq := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "Substrings")
+				for i, c := range components {
+					if len(c) > 0 {
+						switch {
+						case i == len(components)-1:
+							// Final
+							seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsFinal, c[:], "Final Substring"))
+						case i == 0:
+							// Initial
+							seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsInitial, c[:], "Initial Substring"))
+						default:
+							// Any
+							seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsAny, c[:], "Any Substring"))
+						}
+					}
+				}
+				p.AppendChild(seq)
+			}
+		}
+		if !is_partial_match {
+			switch {
+			case p.Tag == FilterEqualityMatch && condition == "*":
+				p.Tag = FilterPresent
+				p.Description = FilterMap[uint64(p.Tag)]
+			default:
+				p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, condition, "Condition"))
+			}
 		}
 		new_pos++
 		return
