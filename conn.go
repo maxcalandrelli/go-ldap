@@ -7,11 +7,14 @@ package ldap
 
 import (
 	"crypto/tls"
+	_ "encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	_ "os"
 	"sync"
 
+	"github.com/apcera/gssapi"
 	"github.com/mmitton/asn1-ber"
 )
 
@@ -25,7 +28,123 @@ type Conn struct {
 	chanProcessMessage chan *messagePacket
 	chanMessageID      chan uint64
 
+	gss_lib           *gssapi.Lib
+	gss_context       *gssapi.CtxId
+	gss_layers_limit  *gssapi.Buffer
+	gss_encrypted     bool
+	gss_qop           gssapi.QOP
+	gss_wrap_overhead int
+	gss_buffer        []byte
+	gss_buffer_pos    int
+
 	closeLock sync.Mutex
+}
+
+func (l *Conn) Write(p []byte) (int, error) {
+	if l.isSSL || l.gss_context == nil {
+		return l.conn.Write(p)
+	}
+	return l.saslWrite(p)
+}
+
+func (l *Conn) saslWrite(p []byte) (int, error) {
+	var _in, _out *gssapi.Buffer
+	var err error
+	if _in, err = l.gss_lib.MakeBufferBytes(p); err == nil {
+		if _, _out, err = l.gss_context.Wrap(l.gss_encrypted, l.gss_qop, _in); err == nil {
+			lenbuf := make([]byte, 4)
+			for i := 0; i < 4; i++ {
+				lenbuf[i] = byte(_out.Length() >> uint(24-i*8))
+			}
+			if j, e := l.conn.Write(lenbuf); e != nil || j < len(lenbuf) {
+				return 0, e
+			}
+			for written := 0; written < _out.Length(); {
+				if j, e := l.conn.Write(_out.Bytes()[written:]); e != nil {
+					return written, e
+				} else {
+					written += j
+				}
+			}
+		}
+	} else {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (l *Conn) saslFillBuffer(buflen int, preFetched []byte) (err error) {
+	if l.gss_buffer_pos < len(l.gss_buffer) {
+		return errors.New("?")
+	}
+	tmpbuf := make([]byte, buflen)
+	copy(tmpbuf, preFetched)
+	cursize := len(preFetched)
+	for cursize < buflen {
+		//fmt.Fprintf(os.Stderr, "reading %d bytes from real conn [prefetched:%d,cursize=%d]\n", cap(tmpbuf)-cursize, preFetched, cursize)
+		if n, err := l.conn.Read(tmpbuf[cursize:]); err != nil {
+			return err
+		} else {
+			cursize += n
+		}
+	}
+	if gssapi_wrapped_buffer, err := l.gss_context.MakeBufferBytes(tmpbuf); err == nil {
+		if gssapi_unwrapped_buffer, _, _, err := l.gss_context.Unwrap(gssapi_wrapped_buffer); err == nil {
+			l.gss_buffer = gssapi_unwrapped_buffer.Bytes()
+			l.gss_buffer_pos = 0
+		}
+	}
+	return err
+}
+
+func sizeRead(buf []byte) int {
+	return (int(buf[0]) << 24) + (int(buf[1]) << 16) + (int(buf[2]) << 8) + (int(buf[3]) << 0)
+}
+
+func (l *Conn) Read(p []byte) (n int, e error) {
+	//fmt.Fprintf(os.Stderr, "reading %d bytes from %v\n", cap(p), l.conn)
+	//fmt.Fprintf(os.Stderr, "buffer:%d/%d\n", l.gss_buffer_pos, cap(l.gss_buffer))
+	if l.gss_buffer_pos < len(l.gss_buffer) {
+		return l.saslReadBuffer(p)
+	}
+	if n, e = l.conn.Read(p); e != nil {
+		return
+	}
+	if l.isSSL || l.gss_context == nil {
+		return
+	}
+	if n < 4 {
+		p2 := make([]byte, 4)
+		copy(p2, p)
+		if _, e = l.conn.Read(p2[n:]); e != nil {
+			return
+		}
+		return l.saslRead(p, sizeRead(p2), []byte{})
+	}
+	return l.saslRead(p, sizeRead(p), p[4:])
+}
+
+func (l *Conn) saslReadBuffer(p []byte) (int, error) {
+	if l.gss_buffer_pos >= len(l.gss_buffer) {
+		return 0, errors.New("no buffered data")
+	}
+	bytesToCopy := len(p)
+	if bytesToCopy >= len(l.gss_buffer)-l.gss_buffer_pos {
+		bytesToCopy = len(l.gss_buffer) - l.gss_buffer_pos
+	}
+	copy(p, l.gss_buffer[l.gss_buffer_pos:l.gss_buffer_pos+bytesToCopy])
+	l.gss_buffer_pos += bytesToCopy
+	return bytesToCopy, nil
+}
+
+func (l *Conn) saslRead(p []byte, buflen int, preFetched []byte) (int, error) {
+	//fmt.Fprintf(os.Stderr, "SASL reading: %d bytes\n", buflen)
+	if l.gss_buffer_pos >= len(l.gss_buffer) {
+		if err := l.saslFillBuffer(buflen, preFetched); err != nil {
+			return 0, err
+		}
+	}
+	return l.saslReadBuffer(p)
 }
 
 // Dial connects to the given address on the given network using net.Dial
@@ -87,6 +206,10 @@ func NewConn(conn net.Conn) *Conn {
 func (l *Conn) start() {
 	go l.reader()
 	go l.processMessages()
+}
+
+func (l *Conn) Peer() net.Addr {
+	return l.conn.RemoteAddr()
 }
 
 // Close closes the connection.
@@ -218,7 +341,8 @@ func (l *Conn) processMessages() {
 				l.chanResults[message_packet.MessageID] = message_packet.Channel
 				buf := message_packet.Packet.Bytes()
 				for len(buf) > 0 {
-					n, err := l.conn.Write(buf)
+					//n, err := l.conn.Write(buf)
+					n, err := l.Write(buf)
 					if err != nil {
 						if l.Debug {
 							fmt.Printf("Error Sending Message: %s\n", err.Error())
@@ -240,8 +364,7 @@ func (l *Conn) processMessages() {
 					fmt.Printf("Unexpected Message Result: %d\n", message_id)
 					ber.PrintPacket(message_packet.Packet)
 				} else {
-					go func(p *ber.Packet) { chanResult <- p }(message_packet.Packet)
-					// chanResult <- message_packet.Packet
+					chanResult <- message_packet.Packet
 				}
 			case MessageFinish:
 				// Remove from message list
@@ -255,7 +378,6 @@ func (l *Conn) processMessages() {
 }
 
 func (l *Conn) closeAllChannels() {
-	fmt.Printf("closeAllChannels\n")
 	for MessageID, Channel := range l.chanResults {
 		if l.Debug {
 			fmt.Printf("Closing channel for MessageID %d\n", MessageID)
@@ -278,7 +400,8 @@ func (l *Conn) finishMessage(MessageID uint64) {
 func (l *Conn) reader() {
 	defer l.Close()
 	for {
-		p, err := ber.ReadPacket(l.conn)
+		//p, err := ber.ReadPacket(l.conn)
+		p, err := ber.ReadPacket(l)
 		if err != nil {
 			if l.Debug {
 				fmt.Printf("ldap.reader: %s\n", err.Error())
@@ -301,6 +424,6 @@ func (l *Conn) reader() {
 
 func (l *Conn) sendProcessMessage(message *messagePacket) {
 	if l.chanProcessMessage != nil {
-		go func() { l.chanProcessMessage <- message }()
+		go func(m *messagePacket) { l.chanProcessMessage <- message }(message)
 	}
 }

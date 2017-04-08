@@ -294,9 +294,11 @@ func NewError(ResultCode uint8, Err error) error {
 func getLDAPResultCode(p *ber.Packet) (code uint8, description string) {
 	if len(p.Children) >= 2 {
 		response := p.Children[1]
-		if response.ClassType == ber.ClassApplication && response.TagType == ber.TypeConstructed && len(response.Children) == 3 {
+		if response.ClassType == ber.ClassApplication && response.TagType == ber.TypeConstructed {
 			code = uint8(response.Children[0].Value.(uint64))
-			description = response.Children[2].Value.(string)
+			if len(response.Children) >= 3 {
+				description = response.Children[2].Value.(string)
+			}
 			return
 		}
 	}

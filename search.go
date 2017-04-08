@@ -6,8 +6,10 @@
 package ldap
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/mmitton/asn1-ber"
 )
@@ -222,6 +224,7 @@ func (l *Conn) Search(SearchRequest *SearchRequest) (*SearchResult, error) {
 		packet = <-channel
 		if l.Debug {
 			fmt.Printf("%d: got response %p\n", messageID, packet)
+			fmt.Fprintf(os.Stderr, "%s", hex.Dump(packet.Bytes()))
 		}
 		if packet == nil {
 			return nil, NewError(ErrorNetwork, errors.New("Could not retrieve message"))
