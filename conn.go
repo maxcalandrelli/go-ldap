@@ -424,6 +424,7 @@ func (l *Conn) reader() {
 
 func (l *Conn) sendProcessMessage(message *messagePacket) {
 	if l.chanProcessMessage != nil {
-		go func(m *messagePacket) { l.chanProcessMessage <- message }(message)
+		//go func(m *messagePacket) { l.chanProcessMessage <- message }(message)
+		l.chanProcessMessage <- message
 	}
 }

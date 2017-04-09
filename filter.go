@@ -219,8 +219,6 @@ func compileFilter(filter string, pos int) (p *ber.Packet, new_pos int, err erro
 		if p.Tag == FilterEqualityMatch {
 			components := strings.Split(condition, "*")
 			if len(components) > 1 {
-				is_partial_match = true
-				p.Tag = FilterSubstrings
 				p.Description = FilterMap[uint64(p.Tag)]
 				seq := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "Substrings")
 				for i, c := range components {
@@ -229,27 +227,34 @@ func compileFilter(filter string, pos int) (p *ber.Packet, new_pos int, err erro
 						case i == len(components)-1:
 							// Final
 							seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsFinal, c[:], "Final Substring"))
+							p.Tag = FilterSubstrings
 						case i == 0:
 							// Initial
 							seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsInitial, c[:], "Initial Substring"))
+							p.Tag = FilterSubstrings
 						default:
 							// Any
 							seq.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, FilterSubstringsAny, c[:], "Any Substring"))
+							p.Tag = FilterSubstrings
 						}
 					}
 				}
-				p.AppendChild(seq)
+				if p.Tag == FilterSubstrings {
+					p.AppendChild(seq)
+				}
 			}
 		}
 		if !is_partial_match {
 			switch {
 			case p.Tag == FilterEqualityMatch && condition == "*":
 				p.Tag = FilterPresent
-				p.Description = FilterMap[uint64(p.Tag)]
+				p = ber.Encode(ber.ClassContext, ber.TypePrimative, FilterPresent, nil, FilterMap[FilterPresent])
+				p.Data.WriteString(attribute)
 			default:
 				p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, condition, "Condition"))
 			}
 		}
+		p.Description = FilterMap[uint64(p.Tag)]
 		new_pos++
 		return
 	}
