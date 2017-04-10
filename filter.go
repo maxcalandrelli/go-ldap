@@ -215,7 +215,6 @@ func compileFilter(filter string, pos int) (p *ber.Packet, new_pos int, err erro
 			return
 		}
 		p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, attribute, "Attribute"))
-		is_partial_match := false
 		if p.Tag == FilterEqualityMatch {
 			components := strings.Split(condition, "*")
 			if len(components) > 1 {
@@ -244,13 +243,12 @@ func compileFilter(filter string, pos int) (p *ber.Packet, new_pos int, err erro
 				}
 			}
 		}
-		if !is_partial_match {
-			switch {
-			case p.Tag == FilterEqualityMatch && condition == "*":
+		if p.Tag == FilterEqualityMatch {
+			if condition == "*" {
 				p.Tag = FilterPresent
 				p = ber.Encode(ber.ClassContext, ber.TypePrimative, FilterPresent, nil, FilterMap[FilterPresent])
 				p.Data.WriteString(attribute)
-			default:
+			} else {
 				p.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, condition, "Condition"))
 			}
 		}
