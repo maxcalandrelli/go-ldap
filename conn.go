@@ -10,6 +10,7 @@ import (
 	_ "encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	_ "os"
 	"sync"
@@ -106,6 +107,9 @@ func (l *Conn) Read(p []byte) (n int, e error) {
 	//fmt.Fprintf(os.Stderr, "buffer:%d/%d\n", l.gss_buffer_pos, cap(l.gss_buffer))
 	if l.gss_buffer_pos < len(l.gss_buffer) {
 		return l.saslReadBuffer(p)
+	}
+	if l.conn == nil {
+		return 0, io.EOF
 	}
 	if n, e = l.conn.Read(p); e != nil {
 		return
