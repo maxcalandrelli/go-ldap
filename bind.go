@@ -123,9 +123,7 @@ func (l *Conn) do_bind(authentication *ber.Packet) error {
 
 	result_code, result_description := getLDAPResultCode(packet)
 
-	if result_code == LDAPResultSaslBindInProgress {
-
-	} else if result_code != 0 {
+	if result_code != 0 {
 		return NewError(result_code, errors.New(result_description))
 	}
 
@@ -155,7 +153,7 @@ func getKrbParams(ctx *gssapi.CtxId, token *gssapi.Buffer) (layersAndLimit *gssa
 	return
 }
 
-func (l *Conn) BindGSSAPI(token *gssapi.Buffer) error {
+func (l *Conn) BindGSSAPI() error {
 	var (
 		err      error
 		buf      *gssapi.Buffer
@@ -199,9 +197,7 @@ func (l *Conn) BindGSSAPI(token *gssapi.Buffer) error {
 	cred = l.gss_lib.GSS_C_NO_CREDENTIAL
 	bindings = l.gss_lib.GSS_C_NO_CHANNEL_BINDINGS
 	life = time.Duration(0)
-	if token == nil {
-		token = l.gss_lib.GSS_C_NO_BUFFER
-	}
+	token := l.gss_lib.GSS_C_NO_BUFFER
 	sasl_channel := make(chan SASLMessage)
 	go l.start_bind(sasl_channel)
 	challenge := SASLMessage{}
@@ -259,45 +255,5 @@ func (l *Conn) BindSimple(username, password string) error {
 }
 
 func (l *Conn) Bind(username, password string) error {
-	messageID := l.nextMessageID()
-
-	packet := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Request")
-	packet.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimative, ber.TagInteger, messageID, "MessageID"))
-	bindRequest := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ApplicationBindRequest, nil, "Bind Request")
-	bindRequest.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimative, ber.TagInteger, 3, "Version"))
-	bindRequest.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimative, ber.TagOctetString, username, "User Name"))
-	bindRequest.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimative, 0, password, "Password"))
-	packet.AppendChild(bindRequest)
-
-	if l.Debug {
-		ber.PrintPacket(packet)
-	}
-
-	channel, err := l.sendMessage(packet)
-	if err != nil {
-		return err
-	}
-	if channel == nil {
-		return NewError(ErrorNetwork, errors.New("Could not send message"))
-	}
-	defer l.finishMessage(messageID)
-	packet = <-channel
-
-	if packet == nil {
-		return NewError(ErrorNetwork, errors.New("Could not retrieve response"))
-	}
-
-	if l.Debug {
-		if err := addLDAPDescriptions(packet); err != nil {
-			return NewError(ErrorDebugging, err)
-		}
-		ber.PrintPacket(packet)
-	}
-
-	result_code, result_description := getLDAPResultCode(packet)
-	if result_code != 0 {
-		return NewError(result_code, errors.New(result_description))
-	}
-
-	return nil
+	return l.BindSimple(username, password)
 }
